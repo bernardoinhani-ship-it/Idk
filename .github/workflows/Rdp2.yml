@@ -7,28 +7,53 @@ jobs:
   rdp:
     name: RDP
     runs-on: windows-latest
+    timeout-minutes: 10
 
     steps:
-      - name: Testar Windows
+      - name: Instalar Tailscale
         shell: pwsh
         run: |
-          Write-Host "RDP workflow funcionando!"
-          Write-Host "Computador: $env:COMPUTERNAME"
-          Write-Host "Usuário: $env:USERNAME"
-          Write-Host "Windows:"
-          Get-CimInstance Win32_OperatingSystem |
-            Select-Object Caption, Version, OSArchitecture
+          $ErrorActionPreference = "Stop"
 
-      - name: Criar arquivo de teste
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+
+          Start-Process `
+            -FilePath "msiexec.exe" `
+            -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" `
+            -Wait
+
+          Remove-Item $installer -Force
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tailscale)) {
+            throw "Tailscale não foi instalado."
+          }
+
+          Write-Host "Tailscale instalado com sucesso."
+
+      - name: Conectar Tailscale
         shell: pwsh
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
         run: |
-          New-Item -ItemType Directory -Force output | Out-Null
+          $ErrorActionPreference = "Stop"
 
-          "RDP workflow funcionando em $(Get-Date)" |
-            Out-File output\teste.txt -Encoding UTF8
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTH_KEY)) {
+            throw "TAILSCALE_AUTH_KEY não está configurada."
+          }
 
-      - name: Enviar arquivo
-        uses: actions/upload-artifact@v4
-        with:
-          name: rdp-output
-          path: output/
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          & $tailscale up `
+            --authkey="$env:TAILSCALE_AUTH_KEY" `
+            --hostname="github-rdp-$env:GITHUB_RUN_ID"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao conectar ao Tailscale."
+          }
+
+          Write-Host "Tailscale

@@ -1,0 +1,59 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp:
+    name: RDP
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Instalar Tailscale
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+
+          Start-Process `
+            -FilePath "msiexec.exe" `
+            -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" `
+            -Wait
+
+          Remove-Item $installer -Force
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tailscale)) {
+            throw "Tailscale não foi instalado."
+          }
+
+          Write-Host "Tailscale instalado com sucesso."
+
+      - name: Conectar Tailscale
+        shell: pwsh
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTH_KEY)) {
+            throw "TAILSCALE_AUTH_KEY não está configurada."
+          }
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          & $tailscale up `
+            --authkey="$env:TAILSCALE_AUTH_KEY" `
+            --hostname="github-rdp-$env:GITHUB_RUN_ID"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao conectar ao Tailscale."
+          }
+
+          Write-Host "Tailscale

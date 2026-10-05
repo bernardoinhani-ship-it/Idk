@@ -1,0 +1,200 @@
+name: Windows Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: Windows Environment
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+
+      - name: Inicializar
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "================================"
+          Write-Host " WINDOWS RUNNER"
+          Write-Host "================================"
+          Write-Host "Data: $(Get-Date)"
+          Write-Host "Usuário: $env:USERNAME"
+          Write-Host "Computador: $env:COMPUTERNAME"
+          Write-Host ""
+
+      - name: Verificar Windows
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $os = Get-CimInstance Win32_OperatingSystem
+
+          Write-Host "Sistema: $($os.Caption)"
+          Write-Host "Versão: $($os.Version)"
+          Write-Host "Arquitetura: $($os.OSArchitecture)"
+          Write-Host "Build: $($os.BuildNumber)"
+
+      - name: Verificar PowerShell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "PowerShell:"
+          $PSVersionTable.PSVersion
+
+          Write-Host ""
+          Write-Host "PowerShell Edition:"
+          $PSVersionTable.PSEdition
+
+      - name: Verificar armazenamento
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=== DISCOS ==="
+
+          Get-PSDrive -PSProvider FileSystem |
+            Select-Object Name,
+              @{Name="UsedGB";Expression={
+                if ($_.Used) {
+                  [math]::Round($_.Used / 1GB, 2)
+                } else {
+                  0
+                }
+              }},
+              @{Name="FreeGB";Expression={
+                if ($_.Free) {
+                  [math]::Round($_.Free / 1GB, 2)
+                } else {
+                  0
+                }
+              }} |
+            Format-Table -AutoSize
+
+      - name: Verificar memória
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $computer = Get-CimInstance Win32_ComputerSystem
+
+          $ramGB = [math]::Round(
+            $computer.TotalPhysicalMemory / 1GB,
+            2
+          )
+
+          Write-Host "RAM total: $ramGB GB"
+
+      - name: Verificar CPU
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $cpu = Get-CimInstance Win32_Processor |
+            Select-Object -First 1
+
+          Write-Host "CPU: $($cpu.Name)"
+          Write-Host "Núcleos: $($cpu.NumberOfCores)"
+          Write-Host "Threads: $($cpu.NumberOfLogicalProcessors)"
+
+      - name: Verificar rede
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=== ADAPTADORES ==="
+
+          Get-NetAdapter |
+            Where-Object Status -eq "Up" |
+            Select-Object Name, InterfaceDescription, LinkSpeed |
+            Format-Table -AutoSize
+
+          Write-Host ""
+          Write-Host "=== IPv4 ==="
+
+          Get-NetIPAddress -AddressFamily IPv4 |
+            Where-Object {
+              $_.IPAddress -notlike "127.*" -and
+              $_.IPAddress -notlike "169.254.*"
+            } |
+            Select-Object InterfaceAlias, IPAddress |
+            Format-Table -AutoSize
+
+      - name: Testar conectividade
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Testando conectividade..."
+
+          $result = Test-NetConnection `
+            -ComputerName "github.com" `
+            -Port 443 `
+            -WarningAction SilentlyContinue
+
+          if (-not $result.TcpTestSucceeded) {
+            throw "Não foi possível conectar ao GitHub pela porta 443."
+          }
+
+          Write-Host "Conectividade OK."
+
+      - name: Verificar serviços importantes
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $services = @(
+            "EventLog",
+            "Winmgmt",
+            "LanmanWorkstation"
+          )
+
+          foreach ($name in $services) {
+            $service = Get-Service -Name $name -ErrorAction SilentlyContinue
+
+            if ($service) {
+              Write-Host "$name : $($service.Status)"
+            } else {
+              Write-Host "$name : não encontrado"
+            }
+          }
+
+      - name: Verificar ferramentas
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          Write-Host "=== Git ==="
+          git --version
+
+          Write-Host ""
+          Write-Host "=== .NET ==="
+
+          if (Get-Command dotnet -ErrorAction SilentlyContinue) {
+            dotnet --info
+          } else {
+            Write-Host ".NET não encontrado."
+          }
+
+          Write-Host ""
+          Write-Host "=== Python ==="
+
+          if (Get-Command python -ErrorAction SilentlyContinue) {
+            python --version
+          } else {
+            Write-Host "Python não encontrado."
+          }
+
+      - name: Teste final
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host ""
+          Write-Host "================================"
+          Write-Host " TESTE CONCLUÍDO COM SUCESSO"
+          Write-Host "================================"
+          Write-Host ""
+          Write-Host "Windows: OK"
+          Write-Host "PowerShell: OK"
+          Write-Host "CPU: OK"
+          Write-Host "RAM: OK"
+          Write-Host "Armazenamento: OK"
+          Write-Host "Rede: OK"
+          Write-Host "Runner: OK"
+          Write-Host ""
+          Write-Host "Hora: $(Get-Date)"

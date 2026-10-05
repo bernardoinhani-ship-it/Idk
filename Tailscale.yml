@@ -1,0 +1,195 @@
+name: rdp
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+
+      # ==========================================
+      # 1. PREPARAR
+      # ==========================================
+      - name: Preparar ambiente
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          New-Item -ItemType Directory `
+            -Path "$env:GITHUB_WORKSPACE\output" `
+            -Force | Out-Null
+
+          Write-Host "Windows Runner iniciado."
+          Write-Host "Computador: $env:COMPUTERNAME"
+          Write-Host "Usuário: $env:USERNAME"
+
+      # ==========================================
+      # 2. INSTALAR TAILSCALE
+      # ==========================================
+      - name: Instalar Tailscale
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+
+          Write-Host "Baixando Tailscale..."
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $installer
+
+          Write-Host "Instalando Tailscale..."
+
+          Start-Process `
+            -FilePath "msiexec.exe" `
+            -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" `
+            -Wait `
+            -NoNewWindow
+
+          Remove-Item $installer -Force
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tailscale)) {
+            throw "Tailscale não foi instalado corretamente."
+          }
+
+          Write-Host "Tailscale instalado."
+
+      # ==========================================
+      # 3. CONECTAR À TAILSCALE
+      # ==========================================
+      - name: Conectar Tailscale
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTH_KEY)) {
+            throw "O secret TAILSCALE_AUTH_KEY não foi configurado."
+          }
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          $hostname = "github-$env:GITHUB_RUN_ID"
+
+          Write-Host "Conectando o runner à Tailnet..."
+
+          & $tailscale up `
+            --authkey="$env:TAILSCALE_AUTH_KEY" `
+            --hostname="$hostname"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao conectar o Tailscale."
+          }
+
+          Write-Host "Tailscale conectado."
+
+      # ==========================================
+      # 4. OBTER IP TAILSCALE
+      # ==========================================
+      - name: Verificar Tailscale
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          Write-Host "=== STATUS ==="
+
+          & $tailscale status
+
+          Write-Host ""
+          Write-Host "=== IP TAILSCALE ==="
+
+          $ip = & $tailscale ip -4
+
+          if ([string]::IsNullOrWhiteSpace($ip)) {
+            throw "Não foi possível obter o IP Tailscale."
+          }
+
+          Write-Host "IP Tailscale: $ip"
+
+      # ==========================================
+      # 5. TESTAR CONECTIVIDADE
+      # ==========================================
+      - name: Testar rede
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          Write-Host "Testando conexão da Tailnet..."
+
+          & $tailscale ping `
+            --c 3 `
+            (hostname)
+
+          Write-Host "Teste concluído."
+
+      # ==========================================
+      # 6. EXECUTAR TAREFAS
+      # ==========================================
+      - name: Executar automação
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Executando tarefas..."
+
+          $output = "$env:GITHUB_WORKSPACE\output"
+
+          @"
+          Windows Runner
+          =========================
+          Computador: $env:COMPUTERNAME
+          Data: $(Get-Date)
+          Tailscale: conectado
+          "@ |
+            Out-File `
+              "$output\runner-info.txt" `
+              -Encoding UTF8
+
+          Write-Host "Arquivo criado."
+
+      # ==========================================
+      # 7. MOSTRAR RESULTADOS
+      # ==========================================
+      - name: Mostrar arquivos
+        run: |
+          Get-ChildItem `
+            "$env:GITHUB_WORKSPACE\output" `
+            -Recurse |
+            Select-Object FullName, Length |
+            Format-Table -AutoSize
+
+      # ==========================================
+      # 8. ENVIAR ARQUIVOS
+      # ==========================================
+      - name: Upload dos resultados
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-output
+          path: output/
+          if-no-files-found: warn
+          retention-days: 7
+
+      # ==========================================
+      # 9. DESCONECTAR
+      # ==========================================
+      - name: Desconectar Tailscale
+        if: always()
+        run: |
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (Test-Path $tailscale) {
+            Write-Host "Desconectando Tailscale..."
+            & $tailscale logout
+          }
+
+          Write-Host "Runner finalizado."

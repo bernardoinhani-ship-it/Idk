@@ -1,0 +1,124 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: RDP
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+
+      - name: Preparar Windows
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "=== RDP WORKFLOW ==="
+          Write-Host "Computador: $env:COMPUTERNAME"
+          Write-Host "Usuário: $env:USERNAME"
+
+          New-Item `
+            -ItemType Directory `
+            -Path "$env:GITHUB_WORKSPACE\output" `
+            -Force | Out-Null
+
+      - name: Instalar Tailscale
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installer = "$env:TEMP\tailscale.msi"
+
+          Invoke-WebRequest `
+            -Uri $url `
+            -OutFile $installer
+
+          Start-Process `
+            -FilePath "msiexec.exe" `
+            -ArgumentList "/i", "`"$installer`"", "/quiet", "/norestart" `
+            -Wait
+
+          Remove-Item $installer -Force
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (-not (Test-Path $tailscale)) {
+            throw "Falha ao instalar Tailscale."
+          }
+
+          Write-Host "Tailscale instalado."
+
+      - name: Conectar ao Tailscale
+        env:
+          TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          if ([string]::IsNullOrWhiteSpace($env:TAILSCALE_AUTH_KEY)) {
+            throw "Configure o secret TAILSCALE_AUTH_KEY primeiro."
+          }
+
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          & $tailscale up `
+            --authkey="$env:TAILSCALE_AUTH_KEY" `
+            --hostname="github-rdp-$env:GITHUB_RUN_ID"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao conectar ao Tailscale."
+          }
+
+          Write-Host "Tailscale conectado."
+
+      - name: Mostrar endereço Tailscale
+        run: |
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          Write-Host "=== ENDEREÇO TAILSCALE ==="
+          & $tailscale ip -4
+
+          Write-Host ""
+          Write-Host "=== STATUS ==="
+          & $tailscale status
+
+      - name: Verificar Windows
+        run: |
+          Get-CimInstance Win32_OperatingSystem |
+            Select-Object Caption, Version, OSArchitecture
+
+      - name: Criar arquivo de teste
+        run: |
+          $file = "$env:GITHUB_WORKSPACE\output\rdp-info.txt"
+
+          @"
+          RDP Workflow
+          =================
+          Computador: $env:COMPUTERNAME
+          Usuário: $env:USERNAME
+          Data: $(Get-Date)
+          Tailscale: conectado
+          "@ | Out-File $file -Encoding UTF8
+
+      - name: Publicar arquivos
+        uses: actions/upload-artifact@v4
+        with:
+          name: rdp-output
+          path: output/
+          retention-days: 7
+
+      - name: Desconectar Tailscale
+        if: always()
+        run: |
+          $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (Test-Path $tailscale) {
+            & $tailscale logout
+          }
+
+          Write-Host "Tailscale desconectado."
